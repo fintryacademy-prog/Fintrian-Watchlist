@@ -1,10 +1,14 @@
 // Holt Tageskursreihen und schreibt fertig berechnete Kennzahlen nach data/quotes.json.
 // Läuft ohne npm-Abhängigkeiten auf Node 20+ (eingebautes fetch).
+//
+// Abrufkette pro Wert: Twelve Data -> Yahoo -> Stooq.
+// Die Quelle, die zuletzt funktioniert hat, wird beim nächsten Lauf zuerst
+// versucht. Dadurch werden Abrufkontingent und Laufzeit geschont.
 
 import { readFile, writeFile } from 'node:fs/promises';
 
 const KEY = process.env.TWELVEDATA_API_KEY || '';
-const PAUSE_MS = Number(process.env.PAUSE_MS || 8100); // Free-Tier: 8 Abrufe pro Minute
+const PAUSE_MS = Number(process.env.PAUSE_MS || 8100); // Twelve Data: 8 Abrufe pro Minute
 const HISTORIE = 1300;      // Handelstage, entspricht rund fünf Jahren
 const CHART_PUNKTE = 200;
 const SPARK_PUNKTE = 100;
@@ -12,11 +16,21 @@ const SPARK_PUNKTE = 100;
 const WATCHLIST = 'data/watchlist.json';
 const QUOTES = 'data/quotes.json';
 
-// Börsenkürzel für den Ersatzabruf über Stooq. Nicht jeder Platz ist dort vorhanden.
+const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+
+// Börsenkürzel je Quelle. Leerer Eintrag bedeutet: kein Zusatz nötig.
+const YAHOO_SUFFIX = {
+  XETR: '.DE', XPAR: '.PA', MTAA: '.MI', XMIL: '.MI', XAMS: '.AS',
+  XLON: '.L', XOSL: '.OL', XSTO: '.ST', XCSE: '.CO', XHEL: '.HE',
+  XTKS: '.T', XHKG: '.HK', XASX: '.AX', XTSE: '.TO', XNZE: '.NZ',
+  XSWX: '.SW', XMAD: '.MC', XBRU: '.BR', XLIS: '.LS', XWBO: '.VI',
+  XNYS: '', XNGS: '', XNMS: '', XNCM: '', XNAS: '', ARCX: '', BATS: ''
+};
+
 const STOOQ_SUFFIX = {
-  XNYS: 'us', XNGS: 'us', XNAS: 'us', ARCX: 'us',
-  XETR: 'de', XPAR: 'fr', XLON: 'uk', XAMS: 'nl',
-  MTAA: 'it', XTKS: 'jp', XHKG: 'hk'
+  XNYS: 'us', XNGS: 'us', XNMS: 'us', XNCM: 'us', XNAS: 'us', ARCX: 'us', BATS: 'us',
+  XETR: 'de', XPAR: 'fr', XLON: 'uk', XAMS: 'nl', MTAA: 'it', XMIL: 'it',
+  XTKS: 'jp', XHKG: 'hk', XMAD: 'es'
 };
 
 const schlafen = ms => new Promise(r => setTimeout(r, ms));
@@ -44,76 +58,133 @@ const prozent = (neu, alt) => (alt > 0 ? Number(((neu / alt - 1) * 100).toFixed(
 // ---------------------------------------------------------------- Datenabruf
 
 async function holen(url) {
-  const antwort = await fetch(url, { headers: { 'user-agent': 'fintrian-watchlist' } });
+  const antwort = await fetch(url, { headers: { 'user-agent': UA, accept: '*/*' } });
   if (!antwort.ok) throw new Error(`HTTP ${antwort.status}`);
   return antwort;
 }
 
-// Einzige Stelle mit Anbieterlogik. Ein Wechsel betrifft nur diese beiden Funktionen.
+function reiheSaeubern(punkte) {
+  return punkte
+    .filter(p => p.d && Number.isFinite(p.c) && p.c > 0)
+    .sort((a, b) => a.d.localeCompare(b.d))
+    .filter((p, i, alle) => i === 0 || p.d !== alle[i - 1].d)
+    .slice(-HISTORIE);
+}
+
+// Quelle 1: Twelve Data. Deckt im kostenlosen Tarif nur US-Börsen ab.
 async function vonTwelveData(eintrag) {
-  if (!KEY) throw new Error('Kein API-Schlüssel gesetzt');
-  const bauen = mitMic => {
+  if (!KEY) throw new Error('kein API-Schlüssel gesetzt');
+
+  const adresse = mitMic => {
     const p = new URLSearchParams({
-      symbol: eintrag.ticker, interval: '1day', outputsize: String(HISTORIE),
-      order: 'ASC', apikey: KEY
+      symbol: eintrag.ticker, interval: '1day',
+      outputsize: String(HISTORIE), order: 'ASC', apikey: KEY
     });
     if (mitMic && eintrag.mic) p.set('mic_code', eintrag.mic);
     return `https://api.twelvedata.com/time_series?${p}`;
   };
 
-  let daten = await (await holen(bauen(true))).json();
-  if (daten.status === 'error' && eintrag.mic) {
-    await schlafen(PAUSE_MS);
-    daten = await (await holen(bauen(false))).json(); // zweiter Versuch ohne Börsenplatz
+  // Zweiter Versuch ohne Börsenplatz, weil ein falsches Marktsegment
+  // (etwa XNGS statt XNCM) einen HTTP-404 auslöst.
+  const versuche = eintrag.mic ? [true, false] : [false];
+  let letzterFehler;
+
+  for (const mitMic of versuche) {
+    try {
+      const daten = await (await holen(adresse(mitMic))).json();
+      if (daten.status === 'error') throw new Error(daten.message || 'Anbieterfehler');
+      if (!Array.isArray(daten.values) || !daten.values.length) throw new Error('leere Zeitreihe');
+      return {
+        waehrung: daten.meta?.currency || eintrag.waehrung || null,
+        reihe: reiheSaeubern(daten.values.map(v => ({ d: v.datetime.slice(0, 10), c: Number(v.close) })))
+      };
+    } catch (fehler) {
+      letzterFehler = fehler;
+      if (mitMic && versuche.length > 1) await schlafen(PAUSE_MS);
+    }
   }
-  if (daten.status === 'error') throw new Error(daten.message || 'Anbieterfehler');
-  if (!Array.isArray(daten.values) || !daten.values.length) throw new Error('Leere Zeitreihe');
+  throw letzterFehler;
+}
+
+// Quelle 2: Yahoo. Kein Schlüssel, breite internationale Abdeckung.
+// Undokumentierter Endpunkt, deshalb bewusst nur als Ausweichquelle.
+async function vonYahoo(eintrag) {
+  const suffix = eintrag.mic ? YAHOO_SUFFIX[eintrag.mic] : '';
+  if (suffix === undefined) throw new Error(`kein Yahoo-Kürzel für ${eintrag.mic}`);
+  const symbol = `${eintrag.ticker}${suffix}`;
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=5y&interval=1d`;
+
+  const daten = await (await holen(url)).json();
+  const ergebnis = daten?.chart?.result?.[0];
+  if (!ergebnis) throw new Error(daten?.chart?.error?.description || 'keine Zeitreihe');
+
+  const zeit = ergebnis.timestamp || [];
+  const schluss = ergebnis.indicators?.quote?.[0]?.close || [];
+  if (!zeit.length || !schluss.length) throw new Error('leere Zeitreihe');
 
   return {
-    waehrung: daten.meta?.currency || eintrag.waehrung || null,
-    reihe: daten.values
-      .map(v => ({ d: v.datetime.slice(0, 10), c: Number(v.close) }))
-      .filter(p => Number.isFinite(p.c) && p.c > 0)
-      .sort((a, b) => a.d.localeCompare(b.d))
+    waehrung: ergebnis.meta?.currency || eintrag.waehrung || null,
+    reihe: reiheSaeubern(zeit.map((t, i) => ({
+      d: new Date(t * 1000).toISOString().slice(0, 10), c: Number(schluss[i])
+    })))
   };
 }
 
+// Quelle 3: Stooq als letzte Ebene, Abdeckung lückenhaft.
 async function vonStooq(eintrag) {
   const suffix = STOOQ_SUFFIX[eintrag.mic] || (eintrag.mic ? null : 'us');
-  if (!suffix) throw new Error('Kein Ersatzabruf für diesen Börsenplatz');
+  if (!suffix) throw new Error(`kein Stooq-Kürzel für ${eintrag.mic}`);
   const symbol = `${eintrag.ticker}.${suffix}`.toLowerCase();
   const text = await (await holen(`https://stooq.com/q/d/l/?s=${symbol}&i=d`)).text();
-  const zeilen = text.trim().split('\n').slice(1);
-  const reihe = zeilen.map(z => {
+  const reihe = reiheSaeubern(text.trim().split('\n').slice(1).map(z => {
     const f = z.split(',');
     return { d: f[0], c: Number(f[4]) };
-  }).filter(p => p.d && Number.isFinite(p.c) && p.c > 0);
-  if (reihe.length < 30) throw new Error('Ersatzabruf ohne verwertbare Daten');
-  return { waehrung: eintrag.waehrung || null, reihe: reihe.slice(-HISTORIE) };
+  }));
+  if (reihe.length < 30) throw new Error('keine verwertbaren Daten');
+  return { waehrung: eintrag.waehrung || null, reihe };
 }
 
-async function zeitreihe(eintrag) {
-  try {
-    return await vonTwelveData(eintrag);
-  } catch (fehler) {
+const QUELLEN = {
+  twelvedata: { holen: vonTwelveData, pause: true },
+  yahoo: { holen: vonYahoo, pause: false },
+  stooq: { holen: vonStooq, pause: false }
+};
+
+// Reihenfolge: die Quelle des letzten erfolgreichen Laufs zuerst.
+function reihenfolge(bevorzugt) {
+  const alle = ['twelvedata', 'yahoo', 'stooq'];
+  return bevorzugt && alle.includes(bevorzugt)
+    ? [bevorzugt, ...alle.filter(q => q !== bevorzugt)]
+    : alle;
+}
+
+async function zeitreihe(eintrag, bevorzugt, zustand) {
+  const meldungen = [];
+
+  for (const name of reihenfolge(bevorzugt)) {
+    const quelle = QUELLEN[name];
+    if (quelle.pause && zustand.twelveDataGenutzt) await schlafen(PAUSE_MS);
+    if (quelle.pause) zustand.twelveDataGenutzt = true;
+
     try {
-      const ersatz = await vonStooq(eintrag);
-      console.log(`  Ersatzquelle Stooq verwendet (${fehler.message})`);
-      return ersatz;
-    } catch {
-      throw fehler;
+      const ergebnis = await quelle.holen(eintrag);
+      if (ergebnis.reihe.length < 30) throw new Error(`nur ${ergebnis.reihe.length} Kurse`);
+      if (name !== 'twelvedata') console.log(`  Quelle: ${name}`);
+      return { ...ergebnis, quelle: name };
+    } catch (fehler) {
+      meldungen.push(`${name}: ${fehler.message}`);
     }
   }
+  throw new Error(meldungen.join(' / '));
 }
 
-// Bei einem unbekannten Symbol die Suchfunktion des Anbieters protokollieren,
-// damit die richtige Schreibweise ohne eigene Recherche im Log steht.
+// Bei unbekanntem Symbol die Suchfunktion protokollieren, damit die richtige
+// Schreibweise ohne eigene Recherche im Log steht.
 async function symbolVorschlagen(ticker) {
   if (!KEY) return;
   try {
     const antwort = await holen(`https://api.twelvedata.com/symbol_search?symbol=${encodeURIComponent(ticker)}&outputsize=5`);
-    const treffer = (await antwort.json()).data || [];
-    for (const t of treffer.slice(0, 5)) {
+    for (const t of ((await antwort.json()).data || []).slice(0, 5)) {
       console.log(`    Vorschlag: symbol=${t.symbol}  mic_code=${t.mic_code}  (${t.instrument_name}, ${t.exchange})`);
     }
   } catch { /* Vorschläge sind optional */ }
@@ -161,10 +232,8 @@ function kennzahlen(reihe) {
   const letzte = reihe.at(-1);
   const vortag = reihe.at(-2);
 
-  const fenster52 = reihe.slice(-252);
-  const hoch52 = hoechster(fenster52);
+  const hoch52 = hoechster(reihe.slice(-252));
   const hoch5j = hoechster(reihe);
-
   const tiefe52 = prozent(letzte.c, hoch52.c);
   const tage = tageZwischen(hoch52.d, heute());
 
@@ -210,25 +279,27 @@ async function main() {
 
   const positionen = liste.positionen.filter(p => p.aktiv !== false);
   const benchmarks = liste.benchmarks || [];
-  const ergebnis = { generiertAm: new Date().toISOString(), positionen: {}, benchmarks: {} };
-  const fehlgeschlagen = [];
-  let erster = true;
+  const ergebnis = { generiertAm: new Date().toISOString(), positionen: {}, benchmarks: {}, fehlgeschlagen: [] };
+  const zustand = { twelveDataGenutzt: false };
+  const genutzteQuellen = {};
 
   const verarbeiten = async (eintrag, ziel, altBestand) => {
-    if (!erster) await schlafen(PAUSE_MS);
-    erster = false;
     console.log(`${eintrag.ticker} – ${eintrag.name}`);
     try {
-      const { reihe, waehrung } = await zeitreihe(eintrag);
-      if (reihe.length < 30) throw new Error(`Nur ${reihe.length} Kurse geliefert`);
-      ziel[eintrag.ticker] = { ...kennzahlen(reihe), waehrung, stale: false, abgerufenAm: new Date().toISOString() };
+      const { reihe, waehrung, quelle } = await zeitreihe(eintrag, altBestand?.[eintrag.ticker]?.quelle, zustand);
+      ziel[eintrag.ticker] = {
+        ...kennzahlen(reihe), waehrung, quelle,
+        stale: false, abgerufenAm: new Date().toISOString()
+      };
+      genutzteQuellen[quelle] = (genutzteQuellen[quelle] || 0) + 1;
     } catch (fehler) {
-      console.log(`  Fehlgeschlagen: ${fehler.message}`);
-      fehlgeschlagen.push(`${eintrag.ticker}: ${fehler.message}`);
+      console.log(`  Fehlgeschlagen – ${fehler.message}`);
+      ergebnis.fehlgeschlagen.push(`${eintrag.ticker}: ${fehler.message}`);
       await symbolVorschlagen(eintrag.ticker);
       const bekannt = altBestand?.[eintrag.ticker];
-      if (bekannt) ziel[eintrag.ticker] = { ...bekannt, stale: true, fehler: fehler.message };
-      else ziel[eintrag.ticker] = { stale: true, fehler: fehler.message };
+      ziel[eintrag.ticker] = bekannt
+        ? { ...bekannt, stale: true, fehler: fehler.message }
+        : { stale: true, fehler: fehler.message };
     }
   };
 
@@ -239,19 +310,20 @@ async function main() {
   for (const p of positionen) {
     const eigen = ergebnis.positionen[p.ticker];
     const bench = ergebnis.benchmarks[p.benchmark];
-    if (eigen?.performance?.m6 != null && bench?.performance?.m6 != null) {
-      eigen.relativeStaerke = Number((eigen.performance.m6 - bench.performance.m6).toFixed(2));
-    } else if (eigen) {
-      eigen.relativeStaerke = null;
-    }
+    if (!eigen) continue;
+    eigen.relativeStaerke = (eigen.performance?.m6 != null && bench?.performance?.m6 != null)
+      ? Number((eigen.performance.m6 - bench.performance.m6).toFixed(2))
+      : null;
   }
 
-  ergebnis.fehlgeschlagen = fehlgeschlagen;
   await writeFile(QUOTES, JSON.stringify(ergebnis) + '\n');
 
   const ok = Object.values(ergebnis.positionen).filter(p => !p.stale).length;
   console.log(`\nFertig: ${ok} von ${positionen.length} Positionen aktualisiert.`);
-  if (fehlgeschlagen.length) console.log(`Nicht abgerufen: ${fehlgeschlagen.join(' | ')}`);
+  console.log(`Quellen: ${Object.entries(genutzteQuellen).map(([q, n]) => `${q} ${n}`).join(', ') || 'keine'}`);
+  if (ergebnis.fehlgeschlagen.length) {
+    console.log(`\nNicht abgerufen:\n  ${ergebnis.fehlgeschlagen.join('\n  ')}`);
+  }
 }
 
 main().catch(fehler => {
