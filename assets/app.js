@@ -4,17 +4,12 @@ const SEKTOREN = [
   'Materials', 'Energy', 'Utilities', 'Real Estate'
 ];
 
-const STUFEN_RANG = {
-  'Am Hoch': 0, 'Rücksetzer': 1, 'Korrektur': 2,
-  'Bärenmarkt': 3, 'Schwerer Bärenmarkt': 4
-};
-
 const NV = 'n. v.';
 
 const zustand = {
   positionen: [], benchmarks: {}, generiertAm: null,
   suche: '', rk: new Set(), stufe: 'alle', sortierung: 'sektor',
-  ansicht: 'sektor', offen: null
+  ansicht: 'sektor', offen: null, intervall: 'tag', chartArt: 'kerzen'
 };
 
 const $ = wahl => document.querySelector(wahl);
@@ -35,6 +30,8 @@ const fmtProzent = wert =>
 
 const fmtPunkte = wert =>
   wert == null ? NV : `${wert > 0 ? '+' : wert < 0 ? '\u2212' : ''}${f2.format(Math.abs(wert))} Pp`;
+
+const fmtZahl = wert => (wert == null ? NV : f2.format(wert));
 
 const fmtDatum = iso => {
   if (!iso) return NV;
@@ -59,10 +56,17 @@ function el(tag, klasse, text) {
 
 function zelle(klasse, oben, obenKlasse, unten, untenKlasse) {
   const box = el('div', klasse);
-  const a = el('div', obenKlasse, oben);
-  box.append(a);
+  box.append(el('div', obenKlasse, oben));
   if (unten != null) box.append(el('div', untenKlasse, unten));
   return box;
+}
+
+// Kürzel aus dem Firmennamen für die Ersatzkachel.
+function monogramm(name) {
+  const teile = name.replace(/[^\p{L}\p{N} ]/gu, ' ').split(/\s+/).filter(Boolean);
+  if (!teile.length) return '?';
+  if (teile.length === 1) return teile[0][0].toUpperCase();
+  return (teile[0][0] + teile[1][0]).toUpperCase();
 }
 
 // ---------------------------------------------------------------- Laden
@@ -112,20 +116,9 @@ function steuerungAufbauen() {
     rkBox.append(knopf);
   }
 
-  $('#suche').addEventListener('input', ereignis => {
-    zustand.suche = ereignis.target.value.trim().toLowerCase();
-    zeichnen();
-  });
-
-  $('#stufe').addEventListener('change', ereignis => {
-    zustand.stufe = ereignis.target.value;
-    zeichnen();
-  });
-
-  $('#sortierung').addEventListener('change', ereignis => {
-    zustand.sortierung = ereignis.target.value;
-    zeichnen();
-  });
+  $('#suche').addEventListener('input', e => { zustand.suche = e.target.value.trim().toLowerCase(); zeichnen(); });
+  $('#stufe').addEventListener('change', e => { zustand.stufe = e.target.value; zeichnen(); });
+  $('#sortierung').addEventListener('change', e => { zustand.sortierung = e.target.value; zeichnen(); });
 
   for (const knopf of document.querySelectorAll('#ansicht-filter .schalter')) {
     knopf.setAttribute('aria-pressed', String(knopf.dataset.ansicht === zustand.ansicht));
@@ -175,8 +168,7 @@ function sortiert(liste) {
     default:
       return kopie.sort((a, b) =>
         SEKTOREN.indexOf(a.sektor) - SEKTOREN.indexOf(b.sektor) ||
-        a.rk - b.rk ||
-        a.name.localeCompare(b.name, 'de'));
+        a.rk - b.rk || a.name.localeCompare(b.name, 'de'));
   }
 }
 
@@ -185,8 +177,7 @@ function sortiert(liste) {
 function uebersichtZeichnen(liste) {
   const mitDaten = liste.filter(p => p.k?.korrekturTiefe != null);
   const durchschnitt = mitDaten.length
-    ? mitDaten.reduce((s, p) => s + p.k.korrekturTiefe, 0) / mitDaten.length
-    : null;
+    ? mitDaten.reduce((s, p) => s + p.k.korrekturTiefe, 0) / mitDaten.length : null;
 
   const felder = [
     ['Positionen', String(liste.length)],
@@ -199,8 +190,7 @@ function uebersichtZeichnen(liste) {
   const veraltet = liste.filter(p => p.k?.stale).length;
   if (veraltet) felder.push(['Ohne frische Daten', String(veraltet)]);
 
-  const box = $('#uebersicht');
-  box.replaceChildren(...felder.map(([titel, wert]) => {
+  $('#uebersicht').replaceChildren(...felder.map(([titel, wert]) => {
     const feld = el('div');
     feld.append(el('span', 'kennzahl-titel', titel), el('span', 'kennzahl-wert zahl', wert));
     return feld;
@@ -212,7 +202,7 @@ function uebersichtZeichnen(liste) {
 function spaltenkopf(mitSektor) {
   const kopf = el('div', 'spaltenkopf');
   kopf.append(
-    el('div'),
+    el('div'), el('div'),
     el('div', null, mitSektor ? 'Wert und Sektor' : 'Wert'),
     el('div', null, 'Kurs'),
     el('div', null, 'Korrektur'),
@@ -283,6 +273,25 @@ function nachSektorZeichnen(liste) {
   return rahmen;
 }
 
+// Kachel mit Kürzel; ein vorhandenes Logo legt sich beim Laden darüber.
+function logoZelle(p) {
+  const box = el('div', 'spalte-logo');
+  const kachel = el('div', 'logo');
+  kachel.append(el('span', 'logo-kuerzel', monogramm(p.name)));
+
+  const bild = new Image();
+  bild.alt = '';
+  bild.className = 'logo-bild';
+  bild.loading = 'lazy';
+  bild.addEventListener('load', () => kachel.classList.add('logo-mit-bild'));
+  bild.addEventListener('error', () => bild.remove());
+  bild.src = `assets/logos/${encodeURIComponent(p.logo || p.ticker + '.png')}`;
+  kachel.append(bild);
+
+  box.append(kachel);
+  return box;
+}
+
 function positionZeichnen(p, mitSektor) {
   const k = p.k;
   const wrapper = el('div', 'position');
@@ -296,11 +305,11 @@ function positionZeichnen(p, mitSektor) {
 
   zeile.append(
     el('div', 'rk-balken'),
+    logoZelle(p),
     zelle('spalte-wert', p.name, 'wert-name', untertitel, 'wert-meta'),
     zelle('spalte-kurs zahl', fmtKurs(k?.kurs, k?.waehrung || p.waehrung), 'kurs-wert',
       fmtProzent(k?.veraenderungTag), `kurs-tag zahl ${vorzeichenKlasse(k?.veraenderungTag)}`),
-    el('div', `spalte-korrektur korrektur zahl ${vorzeichenKlasse(k?.korrekturTiefe)}`,
-      fmtProzent(k?.korrekturTiefe)),
+    el('div', `spalte-korrektur korrektur zahl ${vorzeichenKlasse(k?.korrekturTiefe)}`, fmtProzent(k?.korrekturTiefe)),
     zelle('spalte-dauer zahl',
       k?.korrekturTage == null ? NV : `${f0.format(k.korrekturTage)} Tage`, 'dauer-wert',
       k?.korrekturMonate == null ? '' : `${f1.format(k.korrekturMonate)} Monate`, 'dauer-meta zahl'),
@@ -313,13 +322,7 @@ function positionZeichnen(p, mitSektor) {
   zeile.addEventListener('click', () => {
     zustand.offen = zustand.offen === p.ticker ? null : p.ticker;
     zeichnen();
-    if (zustand.offen === p.ticker) {
-      requestAnimationFrame(() => {
-        const ziel = [...document.querySelectorAll('.zeile')]
-          .find(z => z.getAttribute('aria-expanded') === 'true');
-        ziel?.focus();
-      });
-    }
+    if (zustand.offen === p.ticker) fokusAufOffene();
   });
 
   wrapper.append(zeile);
@@ -327,10 +330,16 @@ function positionZeichnen(p, mitSektor) {
   return wrapper;
 }
 
+function fokusAufOffene() {
+  requestAnimationFrame(() => {
+    [...document.querySelectorAll('.zeile')]
+      .find(z => z.getAttribute('aria-expanded') === 'true')?.focus();
+  });
+}
+
 function stufenZelle(stufe) {
   const box = el('div', 'spalte-stufe');
-  if (!stufe) { box.append(el('span', 'leer', NV)); return box; }
-  box.append(el('span', 'stufe', stufe));
+  box.append(stufe ? el('span', 'stufe', stufe) : el('span', 'leer', NV));
   return box;
 }
 
@@ -355,15 +364,47 @@ function sparkZelle(k) {
 
 // ---------------------------------------------------------------- Detail
 
+const INTERVALLE = [['tag', 'Tage'], ['woche', 'Wochen'], ['monat', 'Monate']];
+const ARTEN = [['kerzen', 'Kerzen'], ['linie', 'Linie']];
+
+function schalterGruppe(eintraege, aktiv, beiWahl, beschriftung) {
+  const box = el('div', 'schalterreihe');
+  box.setAttribute('role', 'group');
+  box.setAttribute('aria-label', beschriftung);
+  for (const [wert, text] of eintraege) {
+    const knopf = el('button', 'schalter schalter-klein', text);
+    knopf.type = 'button';
+    knopf.setAttribute('aria-pressed', String(wert === aktiv));
+    knopf.addEventListener('click', ereignis => { ereignis.stopPropagation(); beiWahl(wert); });
+    box.append(knopf);
+  }
+  return box;
+}
+
 function detailZeichnen(p) {
   const k = p.k;
   const box = el('div', 'detail');
 
-  const links = el('div');
-  if (k?.chart?.c?.length) {
-    links.append(detailChart(k));
-    links.append(el('p', 'legende',
-      'Durchgezogen: Kursverlauf drei Jahre. Waagerecht hell: 52-Wochen-Hoch. Waagerecht gestrichelt: 200-Tage-Durchschnitt.'));
+  const links = el('div', 'detail-chartbereich');
+  const leiste = el('div', 'chart-leiste');
+  leiste.append(
+    schalterGruppe(INTERVALLE, zustand.intervall, wert => {
+      zustand.intervall = wert; zeichnen(); fokusAufOffene();
+    }, 'Zeitraster'),
+    schalterGruppe(ARTEN, zustand.chartArt, wert => {
+      zustand.chartArt = wert; zeichnen(); fokusAufOffene();
+    }, 'Darstellungsart')
+  );
+  links.append(leiste);
+
+  const kerzen = k?.kerzen?.[zustand.intervall];
+  if (kerzen?.c?.length) {
+    links.append(kursChart(kerzen, k));
+    links.append(el('p', 'legende', zustand.intervall === 'tag'
+      ? 'Tageskerzen der letzten sechs Monate. Waagerecht hell: 52-Wochen-Hoch, gestrichelt: 200-Tage-Durchschnitt.'
+      : zustand.intervall === 'woche'
+        ? 'Wochenkerzen der letzten drei Jahre. Waagerecht hell: 52-Wochen-Hoch, gestrichelt: 200-Tage-Durchschnitt.'
+        : 'Monatskerzen der letzten fünf Jahre. Waagerecht hell: 52-Wochen-Hoch, gestrichelt: 200-Tage-Durchschnitt.'));
   } else {
     links.append(el('p', 'hinweis', k?.fehler
       ? `Kein Kursverlauf verfügbar. Letzte Meldung des Anbieters: ${k.fehler}`
@@ -371,29 +412,8 @@ function detailZeichnen(p) {
   }
 
   const rechts = el('div');
-  const tabelle = el('table', 'detail-tabelle');
-  const zeilen = [
-    ['1 Monat', fmtProzent(k?.performance?.m1), k?.performance?.m1],
-    ['3 Monate', fmtProzent(k?.performance?.m3), k?.performance?.m3],
-    ['6 Monate', fmtProzent(k?.performance?.m6), k?.performance?.m6],
-    ['Seit Jahresbeginn', fmtProzent(k?.performance?.ytd), k?.performance?.ytd],
-    ['1 Jahr', fmtProzent(k?.performance?.j1), k?.performance?.j1],
-    ['52-Wochen-Hoch', k?.hoch52w ? `${fmtKurs(k.hoch52w.kurs, k.waehrung || p.waehrung)} am ${fmtDatum(k.hoch52w.datum)}` : NV, null],
-    ['5-Jahres-Hoch', k?.hoch5j ? `${fmtKurs(k.hoch5j.kurs, k.waehrung || p.waehrung)} am ${fmtDatum(k.hoch5j.datum)}` : NV, null],
-    ['Korrektur zum 5-Jahres-Hoch', fmtProzent(k?.korrekturTiefe5j), k?.korrekturTiefe5j],
-    ['200-Tage-Durchschnitt', fmtKurs(k?.ma200, k?.waehrung || p.waehrung), null],
-    [`Relative Stärke gegen ${p.benchmark}`, fmtPunkte(k?.relativeStaerke), k?.relativeStaerke],
-    ['Kursstand vom', fmtDatum(k?.kursDatum), null]
-  ];
-
-  for (const [titel, wert, vergleich] of zeilen) {
-    const tr = el('tr');
-    tr.append(el('th', null, titel));
-    tr.append(el('td', `zahl ${vergleich === null ? '' : vorzeichenKlasse(vergleich)}`, wert));
-    tabelle.append(tr);
-  }
-  rechts.append(tabelle);
-
+  rechts.append(kennzahlenTabelle(p, k));
+  rechts.append(termineBlock(k?.termine, Boolean(p.mic)));
   if (p.notiz) rechts.append(el('p', 'detail-notiz', p.notiz));
   if (k?.stale) {
     rechts.append(el('p', 'detail-notiz veraltet',
@@ -404,44 +424,134 @@ function detailZeichnen(p) {
   return box;
 }
 
-function detailChart(k) {
-  const werte = k.chart.c.filter(w => w != null);
-  const datumsliste = k.chart.d;
-  const breite = 760, hoehe = 240, obenRand = 12, untenRand = 26, linksRand = 0, rechtsRand = 58;
+function kennzahlenTabelle(p, k) {
+  const waehrung = k?.waehrung || p.waehrung;
+  const tabelle = el('table', 'detail-tabelle');
+  const zeilen = [
+    ['1 Monat', fmtProzent(k?.performance?.m1), k?.performance?.m1],
+    ['3 Monate', fmtProzent(k?.performance?.m3), k?.performance?.m3],
+    ['6 Monate', fmtProzent(k?.performance?.m6), k?.performance?.m6],
+    ['Seit Jahresbeginn', fmtProzent(k?.performance?.ytd), k?.performance?.ytd],
+    ['1 Jahr', fmtProzent(k?.performance?.j1), k?.performance?.j1],
+    ['52-Wochen-Hoch', k?.hoch52w ? `${fmtKurs(k.hoch52w.kurs, waehrung)} am ${fmtDatum(k.hoch52w.datum)}` : NV, null],
+    ['5-Jahres-Hoch', k?.hoch5j ? `${fmtKurs(k.hoch5j.kurs, waehrung)} am ${fmtDatum(k.hoch5j.datum)}` : NV, null],
+    ['Korrektur zum 5-Jahres-Hoch', fmtProzent(k?.korrekturTiefe5j), k?.korrekturTiefe5j],
+    ['200-Tage-Durchschnitt', fmtKurs(k?.ma200, waehrung), null],
+    [`Relative Stärke gegen ${p.benchmark}`, fmtPunkte(k?.relativeStaerke), k?.relativeStaerke],
+    ['Kursstand vom', fmtDatum(k?.kursDatum), null]
+  ];
+
+  for (const [titel, wert, vergleich] of zeilen) {
+    const tr = el('tr');
+    tr.append(el('th', null, titel));
+    tr.append(el('td', `zahl ${vergleich === null ? '' : vorzeichenKlasse(vergleich)}`, wert));
+    tabelle.append(tr);
+  }
+  return tabelle;
+}
+
+function termineBlock(termine, istAusland) {
+  const box = el('div', 'termine');
+  box.append(el('h3', 'termine-titel', 'Quartalszahlen'));
+
+  if (!termine) {
+    box.append(el('p', 'termine-leer', istAusland
+      ? 'Termine sind derzeit nur für US-Notierungen verfügbar.'
+      : 'Keine Termindaten vorhanden.'));
+    return box;
+  }
+
+  const tabelle = el('table', 'detail-tabelle');
+  const zeilen = [];
+
+  if (termine.naechster) {
+    const n = termine.naechster;
+    zeilen.push(['Nächster Bericht',
+      `${fmtDatum(n.datum)}${n.quartal ? ` · ${n.quartal}` : ''}`, null]);
+    if (n.epsErwartet != null) zeilen.push(['Erwartetes Ergebnis je Aktie', fmtZahl(n.epsErwartet), null]);
+    const tage = Math.round((new Date(n.datum) - Date.now()) / 86400000);
+    if (Number.isFinite(tage) && tage >= 0) zeilen.push(['Verbleibend', `${f0.format(tage)} Tage`, null]);
+  }
+
+  if (termine.letzter) {
+    const l = termine.letzter;
+    zeilen.push(['Letzter Bericht', fmtDatum(l.datum), null]);
+    zeilen.push(['Erwartet / gemeldet',
+      `${fmtZahl(l.epsErwartet)} / ${fmtZahl(l.epsGemeldet)}`, null]);
+    if (l.abweichung != null) zeilen.push(['Abweichung', fmtProzent(l.abweichung), l.abweichung]);
+  }
+
+  for (const [titel, wert, vergleich] of zeilen) {
+    const tr = el('tr');
+    tr.append(el('th', null, titel));
+    tr.append(el('td', `zahl ${vergleich === null ? '' : vorzeichenKlasse(vergleich)}`, wert));
+    tabelle.append(tr);
+  }
+  box.append(tabelle);
+  return box;
+}
+
+// ------------------------------------------------------------- Kursgrafik
+
+function kursChart(kerzen, k) {
+  const anzahl = kerzen.c.length;
+  const breite = 760, hoehe = 260;
+  const oben = 12, unten = 28, rechts = 62;
 
   const linien = [k.ma200, k.hoch52w?.kurs].filter(w => w != null);
-  const min = Math.min(...werte, ...linien);
-  const max = Math.max(...werte, ...linien);
+  const min = Math.min(...kerzen.l.filter(Number.isFinite), ...linien);
+  const max = Math.max(...kerzen.h.filter(Number.isFinite), ...linien);
   const spanne = (max - min) || 1;
 
-  const x = i => linksRand + (i / (werte.length - 1)) * (breite - linksRand - rechtsRand);
-  const y = w => obenRand + (1 - (w - min) / spanne) * (hoehe - obenRand - untenRand);
+  const nutzBreite = breite - rechts;
+  const schritt = nutzBreite / anzahl;
+  const x = i => (i + 0.5) * schritt;
+  const y = w => oben + (1 - (w - min) / spanne) * (hoehe - oben - unten);
 
-  const pfad = werte.map((w, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(w).toFixed(1)}`).join(' ');
   const teile = [];
 
   // Jahreswechsel als senkrechte Hilfslinien
-  for (let i = 1; i < datumsliste.length; i++) {
-    if (datumsliste[i].slice(0, 4) !== datumsliste[i - 1].slice(0, 4)) {
-      teile.push(`<line x1="${x(i).toFixed(1)}" y1="${obenRand}" x2="${x(i).toFixed(1)}" y2="${hoehe - untenRand}" stroke="var(--linie)" stroke-width="1"></line>`);
-      teile.push(`<text x="${(x(i) + 4).toFixed(1)}" y="${hoehe - untenRand + 15}" fill="var(--text-drei)" font-size="11">${datumsliste[i].slice(0, 4)}</text>`);
+  for (let i = 1; i < anzahl; i++) {
+    if (kerzen.d[i].slice(0, 4) !== kerzen.d[i - 1].slice(0, 4)) {
+      teile.push(`<line x1="${x(i).toFixed(1)}" y1="${oben}" x2="${x(i).toFixed(1)}" y2="${hoehe - unten}" stroke="var(--linie)"></line>`);
+      teile.push(`<text x="${(x(i) + 4).toFixed(1)}" y="${hoehe - unten + 15}" fill="var(--text-drei)" font-size="11">${kerzen.d[i].slice(0, 4)}</text>`);
     }
   }
 
-  if (k.hoch52w?.kurs != null) {
-    teile.push(`<line x1="0" y1="${y(k.hoch52w.kurs).toFixed(1)}" x2="${breite - rechtsRand}" y2="${y(k.hoch52w.kurs).toFixed(1)}" stroke="var(--linie-stark)" stroke-width="1"></line>`);
-    teile.push(`<text x="${breite - rechtsRand + 6}" y="${(y(k.hoch52w.kurs) + 4).toFixed(1)}" fill="var(--text-zwei)" font-size="11">52W-Hoch</text>`);
-  }
-  if (k.ma200 != null) {
-    teile.push(`<line x1="0" y1="${y(k.ma200).toFixed(1)}" x2="${breite - rechtsRand}" y2="${y(k.ma200).toFixed(1)}" stroke="var(--text-drei)" stroke-width="1" stroke-dasharray="4 4"></line>`);
-    teile.push(`<text x="${breite - rechtsRand + 6}" y="${(y(k.ma200) + 4).toFixed(1)}" fill="var(--text-zwei)" font-size="11">200 Tage</text>`);
+  const marke = (wert, farbe, strich, text) => {
+    if (wert == null) return;
+    const yy = y(wert).toFixed(1);
+    teile.push(`<line x1="0" y1="${yy}" x2="${nutzBreite}" y2="${yy}" stroke="${farbe}"${strich}></line>`);
+    teile.push(`<text x="${nutzBreite + 6}" y="${(y(wert) + 4).toFixed(1)}" fill="var(--text-zwei)" font-size="11">${text}</text>`);
+  };
+  marke(k.hoch52w?.kurs, 'var(--linie-stark)', '', '52W-Hoch');
+  marke(k.ma200, 'var(--text-drei)', ' stroke-dasharray="4 4"', '200 Tage');
+
+  if (zustand.chartArt === 'linie') {
+    const pfad = kerzen.c.map((w, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(w).toFixed(1)}`).join(' ');
+    teile.push(`<path d="${pfad}" fill="none" stroke="var(--text)" stroke-width="1.4" stroke-linejoin="round"></path>`);
+  } else {
+    const koerperBreite = Math.max(1.2, Math.min(9, schritt * 0.62));
+    for (let i = 0; i < anzahl; i++) {
+      const o = kerzen.o[i], h = kerzen.h[i], l = kerzen.l[i], c = kerzen.c[i];
+      if (![o, h, l, c].every(Number.isFinite)) continue;
+      const farbe = c >= o ? 'var(--positiv)' : 'var(--negativ)';
+      const xm = x(i);
+      teile.push(`<line x1="${xm.toFixed(1)}" y1="${y(h).toFixed(1)}" x2="${xm.toFixed(1)}" y2="${y(l).toFixed(1)}" stroke="${farbe}" stroke-width="1"></line>`);
+      const yo = y(Math.max(o, c)), yc = y(Math.min(o, c));
+      teile.push(`<rect x="${(xm - koerperBreite / 2).toFixed(1)}" y="${yo.toFixed(1)}" width="${koerperBreite.toFixed(1)}" height="${Math.max(1, yc - yo).toFixed(1)}" fill="${farbe}"></rect>`);
+    }
   }
 
-  teile.push(`<path d="${pfad}" fill="none" stroke="var(--text)" stroke-width="1.4" stroke-linejoin="round"></path>`);
+  // Preisachse rechts
+  for (const anteil of [0, 0.5, 1]) {
+    const wert = min + spanne * anteil;
+    teile.push(`<text x="${nutzBreite + 6}" y="${(y(wert) + 4).toFixed(1)}" fill="var(--text-drei)" font-size="10">${f2.format(wert)}</text>`);
+  }
 
   const box = el('div');
   box.innerHTML = `<svg class="detail-chart" viewBox="0 0 ${breite} ${hoehe}" role="img" ` +
-    `aria-label="Kursverlauf über drei Jahre">${teile.join('')}</svg>`;
+    `aria-label="Kursverlauf, ${anzahl} Werte">${teile.join('')}</svg>`;
   return box;
 }
 
