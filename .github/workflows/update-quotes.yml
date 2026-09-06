@@ -23,12 +23,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-
       - name: Kursdaten holen und Kennzahlen berechnen
         env:
           TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
         run: node scripts/fetch-quotes.mjs
-
       - name: Ergebnis committen
         run: |
           git config user.name "watchlist-bot"
