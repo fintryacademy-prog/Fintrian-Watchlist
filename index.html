@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fintrian Watchlist</title>
+<meta name="description" content="Beobachtungsliste mit Kursen, Korrekturtiefe und Korrekturdauer.">
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="kopf">
+  <div class="kopf-marke">
+    <h1>Fintrian Watchlist</h1>
+    <p class="kopf-unterzeile">Kaufkandidaten nach Sektor und Risikoklasse</p>
+  </div>
+  <div class="kopf-stand">
+    <span class="stand-wert" id="datenstand">Daten werden geladen</span>
+    <span class="stand-hinweis">Kurse verzögert</span>
+  </div>
+</header>
+
+<section class="uebersicht" id="uebersicht" aria-label="Überblick über die Liste"></section>
+
+<div class="steuerung">
+  <div class="steuer-block steuer-suche">
+    <label class="feld-label" for="suche">Suche</label>
+    <input type="search" id="suche" placeholder="Name oder Ticker" autocomplete="off" spellcheck="false">
+  </div>
+
+  <div class="steuer-block">
+    <span class="feld-label" id="rk-label">Risikoklasse</span>
+    <div class="schalterreihe" id="rk-filter" role="group" aria-labelledby="rk-label"></div>
+  </div>
+
+  <div class="steuer-block">
+    <label class="feld-label" for="stufe">Korrekturstufe</label>
+    <select id="stufe">
+      <option value="alle">Alle</option>
+      <option value="Am Hoch">Am Hoch</option>
+      <option value="Rücksetzer">Rücksetzer</option>
+      <option value="Korrektur">Korrektur</option>
+      <option value="Bärenmarkt">Bärenmarkt</option>
+      <option value="Schwerer Bärenmarkt">Schwerer Bärenmarkt</option>
+    </select>
+  </div>
+
+  <div class="steuer-block">
+    <label class="feld-label" for="sortierung">Sortierung</label>
+    <select id="sortierung">
+      <option value="sektor">Sektor und Risikoklasse</option>
+      <option value="korrektur">Tiefste Korrektur</option>
+      <option value="dauer">Längste Korrektur</option>
+      <option value="rs">Beste relative Stärke</option>
+      <option value="name">Name</option>
+    </select>
+  </div>
+
+  <div class="steuer-block steuer-rechts">
+    <span class="feld-label" id="ansicht-label">Ansicht</span>
+    <div class="schalterreihe" id="ansicht-filter" role="group" aria-labelledby="ansicht-label">
+      <button type="button" class="schalter" data-ansicht="sektor">Nach Sektor</button>
+      <button type="button" class="schalter" data-ansicht="tabelle">Tabelle</button>
+    </div>
+  </div>
+
+  <div class="steuer-block">
+    <span class="feld-label">Darstellung</span>
+    <button type="button" class="schalter" id="praesentation" aria-pressed="false">Präsentationsmodus</button>
+  </div>
+</div>
+
+<main id="inhalt" class="inhalt" aria-live="polite">
+  <p class="hinweis">Kursdaten werden geladen.</p>
+</main>
+
+<footer class="fuss">
+  <p>Kurse mit zeitlicher Verzögerung, viermal täglich aktualisiert. Keine Anlageberatung und keine Kaufempfehlung.</p>
+</footer>
+
+<script src="assets/app.js" type="module"></script>
+</body>
+</html>
