@@ -47,6 +47,15 @@ const fmtZeitpunkt = iso => {
 
 const vorzeichenKlasse = wert => (wert == null ? 'leer' : wert > 0 ? 'positiv' : wert < 0 ? 'negativ' : '');
 
+// Wie weit der Kurs noch bis zum eigenen Zielkurs laufen muss, in Prozent.
+// Negativ heisst: er muss noch fallen. Positiv heisst: er liegt schon darunter.
+function zielAbstand(p) {
+  const ziel = Number(p.zielkurs);
+  const kurs = p.k?.kurs;
+  if (!Number.isFinite(ziel) || ziel <= 0 || kurs == null) return null;
+  return Number(((ziel / kurs - 1) * 100).toFixed(2));
+}
+
 function el(tag, klasse, text) {
   const knoten = document.createElement(tag);
   if (klasse) knoten.className = klasse;
@@ -164,6 +173,7 @@ function sortiert(liste) {
     case 'korrektur': return kopie.sort(nachWert(p => p.k?.korrekturTiefe, 1));
     case 'dauer':     return kopie.sort(nachWert(p => p.k?.korrekturTage, -1));
     case 'rs':        return kopie.sort(nachWert(p => p.k?.relativeStaerke, -1));
+    case 'ziel':      return kopie.sort(nachWert(p => zielAbstand(p), -1));
     case 'name':      return kopie.sort((a, b) => a.name.localeCompare(b.name, 'de'));
     default:
       return kopie.sort((a, b) =>
@@ -187,6 +197,11 @@ function uebersichtZeichnen(liste) {
     ['Am Hoch', String(mitDaten.filter(p => p.k.korrekturTiefe > -5).length)]
   ];
 
+  const mitZiel = liste.filter(p => zielAbstand(p) != null);
+  if (mitZiel.length) {
+    felder.push(['In Kaufzone', String(mitZiel.filter(p => zielAbstand(p) >= 0).length)]);
+  }
+
   const veraltet = liste.filter(p => p.k?.stale).length;
   if (veraltet) felder.push(['Ohne frische Daten', String(veraltet)]);
 
@@ -206,6 +221,7 @@ function spaltenkopf(mitSektor) {
     el('div', null, mitSektor ? 'Wert und Sektor' : 'Wert'),
     el('div', null, 'Kurs'),
     el('div', null, 'Korrektur'),
+    el('div', 'spalte-ziel', 'Zum Ziel'),
     el('div', 'spalte-dauer', 'Dauer'),
     el('div', 'spalte-stufe', 'Stufe'),
     el('div', 'spalte-ma200', '200-Tage'),
@@ -310,6 +326,7 @@ function positionZeichnen(p, mitSektor) {
     zelle('spalte-kurs zahl', fmtKurs(k?.kurs, k?.waehrung || p.waehrung), 'kurs-wert',
       fmtProzent(k?.veraenderungTag), `kurs-tag zahl ${vorzeichenKlasse(k?.veraenderungTag)}`),
     el('div', `spalte-korrektur korrektur zahl ${vorzeichenKlasse(k?.korrekturTiefe)}`, fmtProzent(k?.korrekturTiefe)),
+    zielZelle(p),
     zelle('spalte-dauer zahl',
       k?.korrekturTage == null ? NV : `${f0.format(k.korrekturTage)} Tage`, 'dauer-wert',
       k?.korrekturMonate == null ? '' : `${f1.format(k.korrekturMonate)} Monate`, 'dauer-meta zahl'),
@@ -335,6 +352,19 @@ function fokusAufOffene() {
     [...document.querySelectorAll('.zeile')]
       .find(z => z.getAttribute('aria-expanded') === 'true')?.focus();
   });
+}
+
+function zielZelle(p) {
+  const abstand = zielAbstand(p);
+  const box = el('div', 'spalte-ziel zahl');
+  if (abstand == null) {
+    box.append(el('div', 'ziel-leer', p.zielkurs ? NV : '—'));
+    return box;
+  }
+  if (abstand >= 0) box.classList.add('in-kaufzone');
+  box.append(el('div', 'ziel-wert', fmtProzent(abstand)));
+  box.append(el('div', 'ziel-meta', fmtKurs(Number(p.zielkurs), p.k?.waehrung || p.waehrung)));
+  return box;
 }
 
 function stufenZelle(stufe) {
@@ -399,7 +429,7 @@ function detailZeichnen(p) {
 
   const kerzen = k?.kerzen?.[zustand.intervall];
   if (kerzen?.c?.length) {
-    links.append(kursChart(kerzen, k));
+    links.append(kursChart(kerzen, k, p.zielkurs));
     links.append(el('p', 'legende', zustand.intervall === 'tag'
       ? 'Tageskerzen der letzten sechs Monate. Waagerecht hell: 52-Wochen-Hoch, gestrichelt: 200-Tage-Durchschnitt.'
       : zustand.intervall === 'woche'
@@ -438,6 +468,9 @@ function kennzahlenTabelle(p, k) {
     ['Korrektur zum 5-Jahres-Hoch', fmtProzent(k?.korrekturTiefe5j), k?.korrekturTiefe5j],
     ['200-Tage-Durchschnitt', fmtKurs(k?.ma200, waehrung), null],
     [`Relative Stärke gegen ${p.benchmark}`, fmtPunkte(k?.relativeStaerke), k?.relativeStaerke],
+    ['Eigener Zielkurs', p.zielkurs ? fmtKurs(Number(p.zielkurs), waehrung) : 'nicht gesetzt', null],
+    ['Noch bis zum Zielkurs', zielAbstand(p) == null ? NV
+      : zielAbstand(p) >= 0 ? 'Ziel erreicht' : fmtProzent(zielAbstand(p)), null],
     ['Kursstand vom', fmtDatum(k?.kursDatum), null]
   ];
 
@@ -493,12 +526,13 @@ function termineBlock(termine, istAusland) {
 
 // ------------------------------------------------------------- Kursgrafik
 
-function kursChart(kerzen, k) {
+function kursChart(kerzen, k, ziel) {
   const anzahl = kerzen.c.length;
   const breite = 760, hoehe = 260;
   const oben = 12, unten = 28, rechts = 62;
 
-  const linien = [k.ma200, k.hoch52w?.kurs].filter(w => w != null);
+  const zielkurs = Number.isFinite(Number(ziel)) && Number(ziel) > 0 ? Number(ziel) : null;
+  const linien = [k.ma200, k.hoch52w?.kurs, zielkurs].filter(w => w != null);
   const min = Math.min(...kerzen.l.filter(Number.isFinite), ...linien);
   const max = Math.max(...kerzen.h.filter(Number.isFinite), ...linien);
   const spanne = (max - min) || 1;
@@ -526,6 +560,7 @@ function kursChart(kerzen, k) {
   };
   marke(k.hoch52w?.kurs, 'var(--linie-stark)', '', '52W-Hoch');
   marke(k.ma200, 'var(--text-drei)', ' stroke-dasharray="4 4"', '200 Tage');
+  marke(zielkurs, 'var(--ziel)', ' stroke-dasharray="2 3"', 'Ziel');
 
   if (zustand.chartArt === 'linie') {
     const pfad = kerzen.c.map((w, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(w).toFixed(1)}`).join(' ');
