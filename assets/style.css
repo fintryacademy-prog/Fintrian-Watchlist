@@ -7,17 +7,19 @@
   --linie-stark:  #3a3f44;
 
   --text:         #e6e4e1;
-  --text-zwei:    #9ea3a6;
-  --text-drei:    #6a6f73;
+  --text-zwei:    #a5a3a0;
+  --text-drei:    #6f6d6a;
 
-  --positiv:      #5f9e6e;
-  --negativ:      #c2605a;
+  --positiv:      #5fa771;
+  --negativ:      #d1706a;
+  --ziel:         #6d9ec4;
+  --ziel-matt:    #4a6c8a;
 
-  --rk1: #4e9268;
-  --rk2: #8ba24f;
-  --rk3: #c3a233;
-  --rk4: #cb7f3e;
-  --rk5: #b5514c;
+  --rk1: #3f7d59;
+  --rk2: #6f9048;
+  --rk3: #a8912f;
+  --rk4: #d18a3f;
+  --rk5: #ea7d73;
 
   --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
   --s5: 24px; --s6: 32px; --s7: 48px;
@@ -30,7 +32,7 @@
   --t-titel:  26px;
 
   --zeilenhoehe: 44px;
-  --spalten: 3px 30px minmax(150px, 1.5fr) 118px 122px 100px 130px 88px 88px 132px;
+  --spalten: 3px 30px minmax(140px, 1.4fr) 112px 118px 98px 96px 124px 84px 84px 120px;
   --logo: 26px;
 
   --schrift: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -40,7 +42,7 @@ body.praesentation {
   --t-klein: 13px; --t-mini: 14px; --t-basis: 15px; --t-mittel: 17px;
   --t-gross: 24px; --t-titel: 30px;
   --zeilenhoehe: 56px;
-  --spalten: 4px 38px minmax(180px, 1.5fr) 132px 140px 116px 150px 100px 100px 150px;
+  --spalten: 4px 38px minmax(170px, 1.4fr) 128px 138px 112px 112px 142px 96px 96px 138px;
   --logo: 34px;
 }
 
@@ -341,8 +343,8 @@ input[type="search"]::placeholder { color: var(--text-drei); }
 
 /* --------------------------------------------------------------- Schmal */
 
-@media (max-width: 1000px) {
-  :root { --spalten: 3px 26px minmax(110px, 1.4fr) 104px 104px 110px; --logo: 22px; }
+@media (max-width: 1280px) {
+  :root { --spalten: 3px 26px minmax(110px, 1.4fr) 100px 106px 92px 110px; --logo: 22px; }
   .spalte-dauer, .spalte-stufe, .spalte-ma200, .spalte-rs { display: none; }
   .detail { grid-template-columns: minmax(0, 1fr); }
 }
@@ -351,8 +353,8 @@ input[type="search"]::placeholder { color: var(--text-drei); }
   .kopf, .uebersicht, .steuerung, .inhalt, .fuss { padding-left: var(--s4); padding-right: var(--s4); }
   .uebersicht { gap: var(--s4); }
   .steuer-rechts { margin-left: 0; }
-  :root { --spalten: 3px 24px minmax(90px, 1.3fr) 92px 96px; --logo: 20px; }
-  .spalte-spark { display: none; }
+  :root { --spalten: 3px 24px minmax(88px, 1.3fr) 88px 98px; --logo: 20px; }
+  .spalte-spark, .spalte-ziel { display: none; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -428,3 +430,22 @@ input[type="search"]::placeholder { color: var(--text-drei); }
 }
 
 .termine-leer { margin: 0; color: var(--text-drei); font-size: var(--t-klein); }
+
+/* ------------------------------------------------------------- Zielkurs */
+
+/* Eigener Farbkanal, damit die eigene Einschätzung nicht mit der
+   Marktentwicklung in Grün und Rot verwechselt wird. */
+.ziel-wert { font-size: var(--t-basis); color: var(--ziel); }
+.ziel-meta { color: var(--text-drei); font-size: var(--t-klein); }
+.ziel-leer { color: var(--text-drei); }
+
+.in-kaufzone .ziel-wert {
+  color: var(--grund);
+  background: var(--ziel);
+  border-radius: 2px;
+  padding: 1px 5px;
+  display: inline-block;
+  font-weight: 600;
+}
+
+.kennzahl-ziel { color: var(--ziel); }
