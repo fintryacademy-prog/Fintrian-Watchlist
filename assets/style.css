@@ -14,6 +14,8 @@
   --negativ:      #d1706a;
   --ziel:         #6d9ec4;
   --ziel-matt:    #4a6c8a;
+  --swing:        #8c86b8;
+  --bruch:        #b09a5c;
 
   --rk1: #3f7d59;
   --rk2: #6f9048;
@@ -449,3 +451,21 @@ input[type="search"]::placeholder { color: var(--text-drei); }
 }
 
 .kennzahl-ziel { color: var(--ziel); }
+
+/* ---------------------------------------------------------- Marktstruktur */
+
+.strukturlabel {
+  display: inline-block;
+  margin-top: 3px;
+  font-size: var(--t-klein);
+  color: var(--text-drei);
+  border-left: 2px solid var(--text-drei);
+  padding-left: 5px;
+  white-space: nowrap;
+}
+
+.struktur-bruch { color: var(--positiv); border-color: var(--positiv); }
+.struktur-auf   { color: var(--positiv); border-color: var(--positiv); opacity: 0.75; }
+.struktur-boden { color: var(--bruch);   border-color: var(--bruch); }
+.struktur-ab    { color: var(--text-drei); border-color: var(--text-drei); }
+.struktur-top   { color: var(--negativ); border-color: var(--negativ); opacity: 0.8; }
