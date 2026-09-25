@@ -332,6 +332,109 @@ const kerzenPacken = kerzen => ({
   c: kerzen.map(k => runden(k.c))
 });
 
+
+// ------------------------------------------------------- Marktstruktur
+
+// Durchschnittliche Tagesspanne der letzten 14 Tage, in Prozent des Kurses.
+// Dient als Massstab dafür, was bei diesem Wert eine nennenswerte Bewegung ist.
+function spanneProzent(reihe, tage = 14) {
+  const teil = reihe.slice(-tage - 1);
+  if (teil.length < 2) return 3;
+  let summe = 0;
+  for (let i = 1; i < teil.length; i++) {
+    const v = teil[i - 1].c;
+    summe += Math.max(
+      teil[i].h - teil[i].l,
+      Math.abs(teil[i].h - v),
+      Math.abs(teil[i].l - v)
+    ) / v * 100;
+  }
+  return summe / (teil.length - 1);
+}
+
+// Zickzack: behält nur Wendepunkte, denen eine Gegenbewegung von mindestens
+// "schwelle" Prozent folgt. Tageszacken fallen dadurch heraus.
+function swings(reihe, schwelle) {
+  if (reihe.length < 10) return [];
+  const punkte = [];
+  let richtung = 0;                       // 1 = suchen Hoch, -1 = suchen Tief
+  let kandidat = { d: reihe[0].d, k: reihe[0].c, art: null };
+
+  for (const p of reihe) {
+    if (richtung >= 0 && p.h >= kandidat.k) {
+      kandidat = { d: p.d, k: p.h, art: 'hoch' };
+      richtung = 1;
+    } else if (richtung <= 0 && p.l <= kandidat.k) {
+      kandidat = { d: p.d, k: p.l, art: 'tief' };
+      richtung = -1;
+    }
+
+    if (richtung === 1 && (kandidat.k - p.l) / kandidat.k * 100 >= schwelle) {
+      punkte.push({ ...kandidat, art: 'hoch' });
+      kandidat = { d: p.d, k: p.l, art: 'tief' };
+      richtung = -1;
+    } else if (richtung === -1 && (p.h - kandidat.k) / kandidat.k * 100 >= schwelle) {
+      punkte.push({ ...kandidat, art: 'tief' });
+      kandidat = { d: p.d, k: p.h, art: 'hoch' };
+      richtung = 1;
+    }
+  }
+
+  // Der laufende Kandidat ist noch unbestätigt und wird als solcher markiert.
+  if (kandidat.art) punkte.push({ ...kandidat, offen: true });
+  return punkte.map(x => ({ datum: x.d, kurs: runden(x.k), art: x.art, offen: Boolean(x.offen) }));
+}
+
+// Leitet aus der Abfolge der Wendepunkte den Strukturzustand ab.
+function struktur(punkte, reihe) {
+  const kurs = reihe.at(-1).c;
+  const bestaetigt = punkte.filter(p => !p.offen);
+  const hochs = bestaetigt.filter(p => p.art === 'hoch');
+  const tiefs = bestaetigt.filter(p => p.art === 'tief');
+  if (hochs.length < 2 || tiefs.length < 1) {
+    return { status: 'Zu wenig Historie', marke: null, abstandMarke: null };
+  }
+
+  const [h1, h2] = [hochs.at(-1), hochs.at(-2)];
+  const t1 = tiefs.at(-1);
+  const hoeheresHoch = h1.kurs > h2.kurs;
+  const hoeheresTief = tiefs.length >= 2 ? t1.kurs > tiefs.at(-2).kurs : null;
+
+  // Bruchmarke: das jüngste bestätigte Hoch, das noch über dem Kurs liegt.
+  const ueber = hochs.filter(h => h.kurs > kurs);
+  const marke = ueber.length ? ueber.at(-1) : null;
+
+  // Wann wurde das letzte Hoch erstmals überschritten? Rückwärts den ersten
+  // Tag suchen, ab dem der Schluss durchgehend darüber lag.
+  let bruchDatum = null;
+  if (kurs > h1.kurs) {
+    for (let i = reihe.length - 1; i >= 0; i--) {
+      if (reihe[i].c > h1.kurs) bruchDatum = reihe[i].d;
+      else break;
+    }
+  }
+  const tageSeitBruch = bruchDatum ? tageZwischen(bruchDatum, reihe.at(-1).d) : null;
+
+  let status;
+  if (bruchDatum && tageSeitBruch <= 60) status = 'Strukturbruch nach oben';
+  else if (hoeheresHoch && hoeheresTief) status = 'Aufwärtsstruktur';
+  else if (bruchDatum) status = 'Aufwärtsstruktur';
+  else if (hoeheresTief === true && !hoeheresHoch) status = 'Bodenbildung';
+  else if (hoeheresHoch && hoeheresTief === false) status = 'Topbildung';
+  else if (!hoeheresHoch) status = 'Abwärtsstruktur';
+  else status = 'Topbildung';
+
+  return {
+    status,
+    marke: marke ? { kurs: marke.kurs, datum: marke.datum } : null,
+    abstandMarke: marke ? Number(((marke.kurs / kurs - 1) * 100).toFixed(2)) : null,
+    bruchDatum, tageSeitBruch,
+    letztesHoch: { kurs: h1.kurs, datum: h1.datum },
+    letztesTief: { kurs: t1.kurs, datum: t1.datum },
+    hoeheresHoch, hoeheresTief
+  };
+}
+
 function kennzahlen(reihe) {
   const letzte = reihe.at(-1);
   const vortag = reihe.at(-2);
@@ -345,6 +448,10 @@ function kennzahlen(reihe) {
   const ma200 = ma200Basis.length === 200
     ? ma200Basis.reduce((s, p) => s + p.c, 0) / 200
     : null;
+
+  const schwelle = Math.max(5, Math.min(20, spanneProzent(reihe) * 3));
+  const wendepunkte = swings(reihe, schwelle);
+  const marktstruktur = struktur(wendepunkte, reihe);
 
   const jahr = reihe.filter(p => p.d >= monateZurueck(letzte.d, 12));
   const sparkRoh = abtasten(jahr.length > 5 ? jahr : reihe, SPARK_PUNKTE);
@@ -367,6 +474,9 @@ function kennzahlen(reihe) {
     abstandMa200: ma200 ? prozent(letzte.c, ma200) : null,
     performance: performance(reihe, letzte),
     spark: sparkRoh.map(p => Number(((p.c - min) / spanne).toFixed(3))),
+    schwelle: Number(schwelle.toFixed(2)),
+    wendepunkte: wendepunkte.slice(-14),
+    struktur: marktstruktur,
     kerzen: {
       tag: kerzenPacken(reihe.slice(-KERZEN.tag)),
       woche: kerzenPacken(zusammenfassen(reihe, wochenSchluessel, KERZEN.woche)),
