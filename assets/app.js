@@ -9,7 +9,7 @@ const NV = 'n. v.';
 const zustand = {
   positionen: [], benchmarks: {}, generiertAm: null,
   suche: '', rk: new Set(), stufe: 'alle', sortierung: 'sektor',
-  ansicht: 'sektor', offen: null, intervall: 'tag', chartArt: 'kerzen'
+  ansicht: 'sektor', offen: null, intervall: 'tag', chartArt: 'kerzen', struktur: 'alle', swingsZeigen: true
 };
 
 const $ = wahl => document.querySelector(wahl);
@@ -127,6 +127,7 @@ function steuerungAufbauen() {
 
   $('#suche').addEventListener('input', e => { zustand.suche = e.target.value.trim().toLowerCase(); zeichnen(); });
   $('#stufe').addEventListener('change', e => { zustand.stufe = e.target.value; zeichnen(); });
+  $('#struktur').addEventListener('change', e => { zustand.struktur = e.target.value; zeichnen(); });
   $('#sortierung').addEventListener('change', e => { zustand.sortierung = e.target.value; zeichnen(); });
 
   for (const knopf of document.querySelectorAll('#ansicht-filter .schalter')) {
@@ -154,6 +155,7 @@ function gefiltert() {
   return zustand.positionen.filter(p => {
     if (zustand.rk.size && !zustand.rk.has(p.rk)) return false;
     if (zustand.stufe !== 'alle' && p.k?.korrekturStufe !== zustand.stufe) return false;
+    if (zustand.struktur !== 'alle' && p.k?.struktur?.status !== zustand.struktur) return false;
     if (!zustand.suche) return true;
     return (p.name + ' ' + p.ticker).toLowerCase().includes(zustand.suche);
   });
@@ -174,6 +176,7 @@ function sortiert(liste) {
     case 'dauer':     return kopie.sort(nachWert(p => p.k?.korrekturTage, -1));
     case 'rs':        return kopie.sort(nachWert(p => p.k?.relativeStaerke, -1));
     case 'ziel':      return kopie.sort(nachWert(p => zielAbstand(p), -1));
+    case 'bruch':     return kopie.sort(nachWert(p => p.k?.struktur?.abstandMarke, 1));
     case 'name':      return kopie.sort((a, b) => a.name.localeCompare(b.name, 'de'));
     default:
       return kopie.sort((a, b) =>
@@ -196,6 +199,11 @@ function uebersichtZeichnen(liste) {
     ['Ø Korrektur', durchschnitt == null ? NV : fmtProzent(Number(durchschnitt.toFixed(2)))],
     ['Am Hoch', String(mitDaten.filter(p => p.k.korrekturTiefe > -5).length)]
   ];
+
+  const inBodenbildung = liste.filter(p => p.k?.struktur?.status === 'Bodenbildung').length;
+  const imBruch = liste.filter(p => p.k?.struktur?.status === 'Strukturbruch nach oben').length;
+  if (inBodenbildung) felder.push(['Bodenbildung', String(inBodenbildung)]);
+  if (imBruch) felder.push(['Strukturbruch', String(imBruch)]);
 
   const mitZiel = liste.filter(p => zielAbstand(p) != null);
   if (mitZiel.length) {
@@ -330,7 +338,7 @@ function positionZeichnen(p, mitSektor) {
     zelle('spalte-dauer zahl',
       k?.korrekturTage == null ? NV : `${f0.format(k.korrekturTage)} Tage`, 'dauer-wert',
       k?.korrekturMonate == null ? '' : `${f1.format(k.korrekturMonate)} Monate`, 'dauer-meta zahl'),
-    stufenZelle(k?.korrekturStufe),
+    stufenZelle(k),
     el('div', `spalte-ma200 zahl ${vorzeichenKlasse(k?.abstandMa200)}`, fmtProzent(k?.abstandMa200)),
     el('div', `spalte-rs zahl ${vorzeichenKlasse(k?.relativeStaerke)}`, fmtPunkte(k?.relativeStaerke)),
     sparkZelle(k)
@@ -367,9 +375,21 @@ function zielZelle(p) {
   return box;
 }
 
-function stufenZelle(stufe) {
+const STRUKTUR_KLASSE = {
+  'Strukturbruch nach oben': 'struktur-bruch',
+  'Aufwärtsstruktur': 'struktur-auf',
+  'Bodenbildung': 'struktur-boden',
+  'Abwärtsstruktur': 'struktur-ab',
+  'Topbildung': 'struktur-top'
+};
+
+function stufenZelle(k) {
   const box = el('div', 'spalte-stufe');
-  box.append(stufe ? el('span', 'stufe', stufe) : el('span', 'leer', NV));
+  box.append(k?.korrekturStufe ? el('span', 'stufe', k.korrekturStufe) : el('span', 'leer', NV));
+  const st = k?.struktur?.status;
+  if (st && st !== 'Zu wenig Historie') {
+    box.append(el('span', `strukturlabel ${STRUKTUR_KLASSE[st] || ''}`, st));
+  }
   return box;
 }
 
@@ -423,7 +443,10 @@ function detailZeichnen(p) {
     }, 'Zeitraster'),
     schalterGruppe(ARTEN, zustand.chartArt, wert => {
       zustand.chartArt = wert; zeichnen(); fokusAufOffene();
-    }, 'Darstellungsart')
+    }, 'Darstellungsart'),
+    schalterGruppe([['an', 'Wendepunkte']], zustand.swingsZeigen ? 'an' : '', () => {
+      zustand.swingsZeigen = !zustand.swingsZeigen; zeichnen(); fokusAufOffene();
+    }, 'Wendepunkte anzeigen')
   );
   links.append(leiste);
 
@@ -435,6 +458,10 @@ function detailZeichnen(p) {
       : zustand.intervall === 'woche'
         ? 'Wochenkerzen der letzten drei Jahre. Waagerecht hell: 52-Wochen-Hoch, gestrichelt: 200-Tage-Durchschnitt.'
         : 'Monatskerzen der letzten fünf Jahre. Waagerecht hell: 52-Wochen-Hoch, gestrichelt: 200-Tage-Durchschnitt.'));
+    if (zustand.swingsZeigen && k.schwelle) {
+      links.append(el('p', 'legende',
+        `Wendepunkte mit H und T markiert, Mindestamplitude ${f2.format(k.schwelle)} % (aus der Schwankungsbreite des Werts abgeleitet). Der hohle Punkt am Ende ist noch unbestätigt.`));
+    }
   } else {
     links.append(el('p', 'hinweis', k?.fehler
       ? `Kein Kursverlauf verfügbar. Letzte Meldung des Anbieters: ${k.fehler}`
@@ -468,6 +495,13 @@ function kennzahlenTabelle(p, k) {
     ['Korrektur zum 5-Jahres-Hoch', fmtProzent(k?.korrekturTiefe5j), k?.korrekturTiefe5j],
     ['200-Tage-Durchschnitt', fmtKurs(k?.ma200, waehrung), null],
     [`Relative Stärke gegen ${p.benchmark}`, fmtPunkte(k?.relativeStaerke), k?.relativeStaerke],
+    ['Marktstruktur', k?.struktur?.status || NV, null],
+    ['Bruchmarke', k?.struktur?.marke
+      ? `${fmtKurs(k.struktur.marke.kurs, waehrung)} vom ${fmtDatum(k.struktur.marke.datum)}` : 'keine über dem Kurs', null],
+    ['Abstand zur Bruchmarke', k?.struktur?.abstandMarke == null ? NV : fmtProzent(k.struktur.abstandMarke), null],
+    ['Letztes Swing-Tief', k?.struktur?.letztesTief
+      ? `${fmtKurs(k.struktur.letztesTief.kurs, waehrung)} vom ${fmtDatum(k.struktur.letztesTief.datum)}` : NV, null],
+    ['Swing-Schwelle', k?.schwelle == null ? NV : `${f2.format(k.schwelle)} %`, null],
     ['Eigener Zielkurs', p.zielkurs ? fmtKurs(Number(p.zielkurs), waehrung) : 'nicht gesetzt', null],
     ['Noch bis zum Zielkurs', zielAbstand(p) == null ? NV
       : zielAbstand(p) >= 0 ? 'Ziel erreicht' : fmtProzent(zielAbstand(p)), null],
@@ -527,6 +561,7 @@ function termineBlock(termine, istAusland) {
 // ------------------------------------------------------------- Kursgrafik
 
 function kursChart(kerzen, k, ziel) {
+  const zeigeSwings = zustand.swingsZeigen && Array.isArray(k.wendepunkte) && k.wendepunkte.length > 1;
   const anzahl = kerzen.c.length;
   const breite = 760, hoehe = 260;
   const oben = 12, unten = 28, rechts = 62;
@@ -561,6 +596,7 @@ function kursChart(kerzen, k, ziel) {
   marke(k.hoch52w?.kurs, 'var(--linie-stark)', '', '52W-Hoch');
   marke(k.ma200, 'var(--text-drei)', ' stroke-dasharray="4 4"', '200 Tage');
   marke(zielkurs, 'var(--ziel)', ' stroke-dasharray="2 3"', 'Ziel');
+  if (k.struktur?.marke) marke(k.struktur.marke.kurs, 'var(--bruch)', ' stroke-dasharray="6 3"', 'Bruchmarke');
 
   if (zustand.chartArt === 'linie') {
     const pfad = kerzen.c.map((w, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(w).toFixed(1)}`).join(' ');
@@ -575,6 +611,33 @@ function kursChart(kerzen, k, ziel) {
       teile.push(`<line x1="${xm.toFixed(1)}" y1="${y(h).toFixed(1)}" x2="${xm.toFixed(1)}" y2="${y(l).toFixed(1)}" stroke="${farbe}" stroke-width="1"></line>`);
       const yo = y(Math.max(o, c)), yc = y(Math.min(o, c));
       teile.push(`<rect x="${(xm - koerperBreite / 2).toFixed(1)}" y="${yo.toFixed(1)}" width="${koerperBreite.toFixed(1)}" height="${Math.max(1, yc - yo).toFixed(1)}" fill="${farbe}"></rect>`);
+    }
+  }
+
+  // Wendepunkte als Zickzack über den Verlauf legen
+  if (zeigeSwings) {
+    const proTag = new Map(kerzen.d.map((d, i) => [d, i]));
+    const naechster = datum => {
+      if (proTag.has(datum)) return proTag.get(datum);
+      for (let i = 0; i < kerzen.d.length; i++) if (kerzen.d[i] >= datum) return i;
+      return null;
+    };
+
+    const sichtbar = k.wendepunkte
+      .map(w => ({ ...w, i: naechster(w.datum) }))
+      .filter(w => w.i != null && w.kurs >= min && w.kurs <= max);
+
+    if (sichtbar.length > 1) {
+      const linie = sichtbar.map(w => `${x(w.i).toFixed(1)},${y(w.kurs).toFixed(1)}`).join(' ');
+      teile.push(`<polyline points="${linie}" fill="none" stroke="var(--swing)" stroke-width="1" ` +
+        `stroke-dasharray="3 2" opacity="0.75"></polyline>`);
+      for (const w of sichtbar) {
+        const form = w.art === 'hoch' ? -1 : 1;
+        teile.push(`<circle cx="${x(w.i).toFixed(1)}" cy="${y(w.kurs).toFixed(1)}" r="${w.offen ? 2 : 3}" ` +
+          `fill="${w.offen ? 'var(--grund)' : 'var(--swing)'}" stroke="var(--swing)" stroke-width="1"></circle>`);
+        teile.push(`<text x="${x(w.i).toFixed(1)}" y="${(y(w.kurs) + form * 9).toFixed(1)}" ` +
+          `fill="var(--swing)" font-size="9" text-anchor="middle">${w.art === 'hoch' ? 'H' : 'T'}</text>`);
+      }
     }
   }
 
