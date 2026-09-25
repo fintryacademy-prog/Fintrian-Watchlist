@@ -192,20 +192,33 @@ const QUELLEN = {
   stooq: { holen: vonStooq, pause: 500 }
 };
 
-function reihenfolge(bevorzugt) {
-  const alle = ['twelvedata', 'yahoo', 'stooq'];
-  return bevorzugt && alle.includes(bevorzugt)
-    ? [bevorzugt, ...alle.filter(q => q !== bevorzugt)]
-    : alle;
+// US-Werte laufen immer zuerst über die offizielle Schnittstelle, damit sich
+// die Quelle nicht nach einem einzelnen Fehlschlag dauerhaft auf den
+// undokumentierten Yahoo-Zugang verschiebt. Twelve Data deckt im kostenlosen
+// Tarif keine Auslandsbörsen ab und steht dort deshalb an letzter Stelle.
+function reihenfolge(eintrag, bevorzugt) {
+  if (!eintrag.mic) return ['twelvedata', 'yahoo', 'stooq'];
+  const ausland = ['yahoo', 'stooq', 'twelvedata'];
+  return bevorzugt && ausland.includes(bevorzugt)
+    ? [bevorzugt, ...ausland.filter(q => q !== bevorzugt)]
+    : ausland;
+}
+
+// Mindestabstand zwischen zwei Abrufen derselben Quelle, gemessen in echter
+// Zeit. Gilt auch dann, wenn dazwischen eine andere Quelle abgefragt wurde.
+const letzterAufruf = {};
+async function drosseln(name, pause) {
+  const seit = Date.now() - (letzterAufruf[name] || 0);
+  if (seit < pause) await schlafen(pause - seit);
+  letzterAufruf[name] = Date.now();
 }
 
 async function zeitreihe(eintrag, bevorzugt, zustand) {
   const meldungen = [];
 
-  for (const name of reihenfolge(bevorzugt)) {
+  for (const name of reihenfolge(eintrag, bevorzugt)) {
     const quelle = QUELLEN[name];
-    if (zustand.zuletzt === name) await schlafen(quelle.pause);
-    zustand.zuletzt = name;
+    await drosseln(name, quelle.pause);
 
     try {
       const ergebnis = await quelle.holen(eintrag);
@@ -222,6 +235,7 @@ async function zeitreihe(eintrag, bevorzugt, zustand) {
 
 async function symbolVorschlagen(ticker) {
   if (!KEY) return;
+  await drosseln('twelvedata', PAUSE_MS);
   try {
     const antwort = await holen(`https://api.twelvedata.com/symbol_search?symbol=${encodeURIComponent(ticker)}&outputsize=4`);
     for (const t of ((await antwort.json()).data || []).slice(0, 4)) {
